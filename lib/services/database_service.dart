@@ -2,6 +2,7 @@ import '../models/pet.dart';
 import '../models/feeding.dart';
 import '../models/medication.dart';
 import '../models/task.dart';
+import '../models/reminder.dart';
 
 // Simple in-memory database service
 // In a real app, you would use sqflite or Hive for local storage
@@ -16,6 +17,7 @@ class DatabaseService {
   List<Feeding> _feedings = [];
   List<Medication> _medications = [];
   List<Task> _tasks = [];
+  List<Reminder> _reminders = []; // New reminders list
 
   // PETS
   Future<List<Pet>> getAllPets() async {
@@ -223,5 +225,141 @@ class DatabaseService {
     final initialLength = _tasks.length;
     _tasks.removeWhere((task) => task.id == id);
     return initialLength != _tasks.length;
+  }
+
+  // REMINDERS 
+  Future<List<Reminder>> getAllReminders() async {
+    return [..._reminders];
+  }
+
+  Future<List<Reminder>> getRemindersForPet(String petId) async {
+    return _reminders.where((reminder) => reminder.petId == petId).toList();
+  }
+
+  Future<Reminder?> getReminderById(int? id) async {
+    try {
+      return _reminders.firstWhere((reminder) => reminder.id == id);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<int> insertReminder(Reminder reminder) async {
+    final id = _reminders.isEmpty 
+        ? 1 
+        : _reminders.map((r) => r.id ?? 0).reduce((a, b) => a > b ? a : b) + 1;
+    
+    final newReminder = Reminder(
+      id: id,
+      petId: reminder.petId,
+      type: reminder.type,
+      title: reminder.title,
+      time: reminder.time,
+      daysOfWeek: reminder.daysOfWeek,
+      isActive: reminder.isActive,
+      details: reminder.details,
+      notes: reminder.notes,
+    );
+    
+    _reminders.add(newReminder);
+    return id;
+  }
+
+  Future<bool> updateReminder(Reminder reminder) async {
+    final index = _reminders.indexWhere((r) => r.id == reminder.id);
+    if (index == -1) return false;
+    
+    _reminders[index] = reminder;
+    return true;
+  }
+
+  Future<bool> deleteReminder(int? id) async {
+    final initialLength = _reminders.length;
+    _reminders.removeWhere((reminder) => reminder.id == id);
+    return initialLength != _reminders.length;
+  }
+
+  // Helper methods for handling reminder actions
+
+  // Create a feeding record from a reminder
+  Future<int> insertFeedingFromReminder(
+    String petId, 
+    String type, 
+    double amount, 
+    String unit,
+    String notes
+  ) async {
+    final feeding = Feeding(
+      petId: petId,
+      type: type,
+      amount: amount,
+      unit: unit,
+      timestamp: DateTime.now(),
+      notes: notes,
+    );
+    
+    return await insertFeeding(feeding);
+  }
+
+  // Record medication administration from a reminder
+  Future<void> recordMedicationFromReminder(
+    String petId,
+    String medicationName,
+    String dosage,
+    String notes
+  ) async {
+    // Find the existing medication
+    try {
+      final medications = await getMedicationsForPet(petId);
+      final medication = medications.firstWhere(
+        (med) => med.name == medicationName,
+        orElse: () => Medication(
+          petId: petId,
+          name: medicationName,
+          dosage: dosage,
+          nextDose: DateTime.now().add(const Duration(days: 1)),
+          notes: notes,
+        ),
+      );
+      
+      // If it's a recurring medication, update next dose
+      if (medication.isRecurring && medication.frequencyDays != null) {
+        final updatedMedication = medication.updateNextDose();
+        
+        if (medication.id != null) {
+          await updateMedication(updatedMedication);
+        } else {
+          await insertMedication(updatedMedication);
+        }
+      }
+    } catch (e) {
+      // Create a one-time medication record if needed
+      final medication = Medication(
+        petId: petId,
+        name: medicationName,
+        dosage: dosage,
+        nextDose: DateTime.now().add(const Duration(days: 1)),
+        notes: 'Administered on ${DateTime.now()}. $notes',
+      );
+      
+      await insertMedication(medication);
+    }
+  }
+  
+  // Create a grooming task record from a reminder
+  Future<int> insertGroomingTask(
+    String petId,
+    String description,
+    String notes
+  ) async {
+    final task = Task(
+      petId: petId,
+      description: description,
+      dueDate: DateTime.now(),
+      completed: true,
+      notes: 'Completed on ${DateTime.now()}. $notes',
+    );
+    
+    return await insertTask(task);
   }
 } 

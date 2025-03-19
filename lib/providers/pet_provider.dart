@@ -110,4 +110,13 @@ class PetProvider with ChangeNotifier {
       notifyListeners();
     }
   }
+
+  // Find a pet by ID
+  Pet? findById(String id) {
+    try {
+      return _pets.firstWhere((pet) => pet.id == id);
+    } catch (e) {
+      return null;
+    }
+  }
 } 

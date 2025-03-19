@@ -5,12 +5,19 @@ import '../models/pet.dart';
 import '../models/feeding.dart';
 import '../models/medication.dart';
 import '../models/task.dart';
+import '../models/reminder.dart';
 import '../providers/feeding_provider.dart';
 import '../providers/medication_provider.dart';
 import '../providers/task_provider.dart';
+import '../providers/reminder_provider.dart';
+import '../widgets/reminder_card.dart';
 import 'feeding_screen.dart';
 import 'medication_screen.dart';
 import 'task_screen.dart';
+import 'add_pet_screen.dart';
+import 'add_reminder_screen.dart';
+import 'reminders_screen.dart';
+import 'dart:io';
 
 class PetDetailScreen extends StatefulWidget {
   final Pet pet;
@@ -30,11 +37,12 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
   bool _isLoadingFeedings = false;
   bool _isLoadingMedications = false;
   bool _isLoadingTasks = false;
+  bool _isLoadingReminders = false;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
   }
 
   @override
@@ -51,6 +59,7 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
       _isLoadingFeedings = true;
       _isLoadingMedications = true;
       _isLoadingTasks = true;
+      _isLoadingReminders = true;
     });
 
     // Load feedings
@@ -79,6 +88,15 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
         _isLoadingTasks = false;
       });
     });
+    
+    // Load reminders
+    Provider.of<ReminderProvider>(context, listen: false)
+        .loadRemindersForPet(widget.pet.id)
+        .then((_) {
+      setState(() {
+        _isLoadingReminders = false;
+      });
+    });
   }
 
   @override
@@ -98,6 +116,7 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
             Tab(text: 'Overview'),
             Tab(text: 'Medications'),
             Tab(text: 'Tasks'),
+            Tab(text: 'Reminders'),
           ],
         ),
       ),
@@ -111,6 +130,9 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
           _isLoadingTasks 
               ? const Center(child: CircularProgressIndicator())
               : _buildTasksTab(),
+          _isLoadingReminders
+              ? const Center(child: CircularProgressIndicator())
+              : _buildRemindersTab(),
         ],
       ),
       floatingActionButton: FloatingActionButton(
@@ -126,25 +148,49 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Pet header
+          // Pet header with Edit Profile button
           Center(
             child: Column(
               children: [
-                Hero(
-                  tag: 'pet-avatar-${widget.pet.id}',
-                  child: CircleAvatar(
-                    radius: 60,
-                    backgroundColor: Colors.blue.shade100,
-                    child: Icon(
-                      widget.pet.species == 'Dog' 
-                          ? Icons.pets 
-                          : widget.pet.species == 'Cat'
-                              ? Icons.emoji_nature
-                              : Icons.cruelty_free,
-                      size: 60,
-                      color: Colors.blue,
+                Stack(
+                  children: [
+                    Hero(
+                      tag: 'pet-avatar-${widget.pet.id}',
+                      child: CircleAvatar(
+                        radius: 60,
+                        backgroundColor: const Color(0xFFE6F2EF),
+                        backgroundImage: _getPetImage(),
+                        child: (widget.pet.imageUrl == null || widget.pet.imageUrl!.isEmpty)
+                          ? Icon(
+                              widget.pet.species == 'Dog' 
+                                  ? Icons.pets 
+                                  : widget.pet.species == 'Cat'
+                                      ? Icons.emoji_nature
+                                      : Icons.cruelty_free,
+                              size: 60,
+                              color: const Color(0xFF7EB5A6),
+                            )
+                          : null,
+                      ),
                     ),
-                  ),
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: CircleAvatar(
+                        radius: 18,
+                        backgroundColor: const Color(0xFF7EB5A6),
+                        child: IconButton(
+                          icon: const Icon(
+                            Icons.edit,
+                            size: 16,
+                            color: Colors.white,
+                          ),
+                          onPressed: () => _navigateToEditPet(context),
+                          tooltip: 'Edit Profile',
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
                 Text(
@@ -190,6 +236,21 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
           
           const SizedBox(height: 24),
           
+          // Today's Reminders
+          const Text(
+            'Today\'s Reminders',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _isLoadingReminders
+              ? const Center(child: CircularProgressIndicator())
+              : _buildTodayReminders(),
+          
+          const SizedBox(height: 24),
+          
           // Recent feedings
           const Text(
             'Recent Feedings',
@@ -214,8 +275,10 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
             ),
           ),
           const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.spaceEvenly,
             children: [
               _buildQuickActionButton(
                 context,
@@ -238,10 +301,41 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
                 Colors.orange,
                 () => _navigateToTaskScreen(context),
               ),
+              _buildQuickActionButton(
+                context,
+                'Add Reminder',
+                Icons.notifications_active,
+                Colors.blue,
+                () => _navigateToAddReminderScreen(context),
+              ),
             ],
           ),
         ],
       ),
+    );
+  }
+  
+  Widget _buildTodayReminders() {
+    final reminderProvider = Provider.of<ReminderProvider>(context);
+    final reminders = reminderProvider.getRemindersForToday(widget.pet.id);
+    
+    if (reminders.isEmpty) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(16.0),
+          child: Text('No reminders for today. Add a new reminder!'),
+        ),
+      );
+    }
+    
+    return Column(
+      children: reminders.map((reminder) {
+        return ReminderCard(
+          reminder: reminder,
+          onEdit: () => _navigateToEditReminderScreen(context, reminder),
+          onDelete: () => _deleteReminder(context, reminder),
+        );
+      }).toList(),
     );
   }
 
@@ -406,6 +500,10 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
     );
   }
 
+  Widget _buildRemindersTab() {
+    return RemindersScreen(petId: widget.pet.id);
+  }
+
   Widget _buildTaskItem(BuildContext context, Task task) {
     final isOverdue = task.isOverdue;
     final isHighPriority = task.priority == 3;
@@ -514,6 +612,14 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
                     _navigateToTaskScreen(context);
                   },
                 ),
+                ListTile(
+                  leading: const Icon(Icons.notifications_active, color: Colors.blue),
+                  title: const Text('Reminder'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _navigateToAddReminderScreen(context);
+                  },
+                ),
               ],
             ),
             actions: [
@@ -532,6 +638,10 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
       case 2:
         // Tasks tab
         _navigateToTaskScreen(context);
+        break;
+      case 3:
+        // Reminders tab
+        _navigateToAddReminderScreen(context);
         break;
     }
   }
@@ -567,6 +677,33 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
         ),
       ),
     );
+  }
+  
+  void _navigateToAddReminderScreen(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddReminderScreen(petId: widget.pet.id),
+      ),
+    ).then((_) {
+      // Refresh reminders when returning
+      _loadData();
+    });
+  }
+  
+  void _navigateToEditReminderScreen(BuildContext context, Reminder reminder) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddReminderScreen(
+          petId: widget.pet.id,
+          reminder: reminder,
+        ),
+      ),
+    ).then((_) {
+      // Refresh reminders when returning
+      _loadData();
+    });
   }
 
   void _deleteFeeding(BuildContext context, Feeding feeding) {
@@ -652,9 +789,62 @@ class _PetDetailScreenState extends State<PetDetailScreen> with SingleTickerProv
       ),
     );
   }
+  
+  void _deleteReminder(BuildContext context, Reminder reminder) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm Delete'),
+        content: const Text('Are you sure you want to delete this reminder?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Provider.of<ReminderProvider>(context, listen: false)
+                  .deleteReminder(reminder.id!);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Reminder deleted'),
+                ),
+              );
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _toggleTaskCompletion(BuildContext context, Task task) {
     Provider.of<TaskProvider>(context, listen: false)
         .toggleTaskCompletion(task);
+  }
+
+  ImageProvider? _getPetImage() {
+    if (widget.pet.imageUrl == null || widget.pet.imageUrl!.isEmpty) {
+      return null;
+    }
+
+    if (widget.pet.imageUrl!.startsWith('http')) {
+      return NetworkImage(widget.pet.imageUrl!);
+    } else {
+      return FileImage(File(widget.pet.imageUrl!));
+    }
+  }
+
+  void _navigateToEditPet(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddPetScreen(pet: widget.pet),
+      ),
+    ).then((_) {
+      // Refresh data when returning from edit screen
+      _loadData();
+    });
   }
 } 

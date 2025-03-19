@@ -1,6 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 import '../models/pet.dart';
 import '../providers/pet_provider.dart';
 
@@ -23,6 +27,8 @@ class _AddPetScreenState extends State<AddPetScreen> {
   final _notesController = TextEditingController();
   DateTime? _birthDate;
   bool _isEditing = false;
+  String? _profileImagePath;
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
@@ -40,6 +46,7 @@ class _AddPetScreenState extends State<AddPetScreen> {
       }
       _notesController.text = widget.pet!.notes;
       _birthDate = widget.pet!.birthDate;
+      _profileImagePath = widget.pet!.imageUrl;
     }
   }
 
@@ -74,6 +81,50 @@ class _AddPetScreenState extends State<AddPetScreen> {
     }
   }
 
+  Future<void> _pickImage() async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      if (image != null) {
+        // Copy the image to the app's documents directory for persistence
+        final appDir = await getApplicationDocumentsDirectory();
+        final fileName = 'pet_${DateTime.now().millisecondsSinceEpoch}${path.extension(image.path)}';
+        final savedImage = File(path.join(appDir.path, fileName));
+        
+        await File(image.path).copy(savedImage.path);
+        
+        setState(() {
+          _profileImagePath = savedImage.path;
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error picking image: $e')),
+      );
+    }
+  }
+
+  Future<void> _takePhoto() async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.camera);
+      if (image != null) {
+        // Copy the image to the app's documents directory for persistence
+        final appDir = await getApplicationDocumentsDirectory();
+        final fileName = 'pet_${DateTime.now().millisecondsSinceEpoch}${path.extension(image.path)}';
+        final savedImage = File(path.join(appDir.path, fileName));
+        
+        await File(image.path).copy(savedImage.path);
+        
+        setState(() {
+          _profileImagePath = savedImage.path;
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error taking photo: $e')),
+      );
+    }
+  }
+
   void _savePet() {
     if (!_formKey.currentState!.validate()) {
       return;
@@ -89,6 +140,7 @@ class _AddPetScreenState extends State<AddPetScreen> {
       weight: _weightController.text.isNotEmpty 
           ? double.parse(_weightController.text) 
           : null,
+      imageUrl: _profileImagePath,
       notes: _notesController.text,
     );
 
@@ -121,6 +173,35 @@ class _AddPetScreenState extends State<AddPetScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Profile picture selection
+              Center(
+                child: Column(
+                  children: [
+                    GestureDetector(
+                      onTap: () => _showImagePickerOptions(context),
+                      child: CircleAvatar(
+                        radius: 60,
+                        backgroundColor: const Color(0xFFE6F2EF),
+                        backgroundImage: _getProfileImage(),
+                        child: _profileImagePath == null
+                            ? const Icon(
+                                Icons.add_a_photo,
+                                size: 50,
+                                color: Color(0xFF7EB5A6),
+                              )
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () => _showImagePickerOptions(context),
+                      child: const Text('Add Photo'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              
               TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(
@@ -248,14 +329,12 @@ class _AddPetScreenState extends State<AddPetScreen> {
               ),
               const SizedBox(height: 24),
               
-              Center(
+              SizedBox(
+                width: double.infinity,
+                height: 50,
                 child: ElevatedButton(
                   onPressed: _savePet,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 12),
-                    textStyle: const TextStyle(fontSize: 16),
-                  ),
-                  child: Text(_isEditing ? 'Save Changes' : 'Add Pet'),
+                  child: Text(_isEditing ? 'Update Pet' : 'Add Pet'),
                 ),
               ),
             ],
@@ -263,5 +342,56 @@ class _AddPetScreenState extends State<AddPetScreen> {
         ),
       ),
     );
+  }
+  
+  void _showImagePickerOptions(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text('Choose from Gallery'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _pickImage();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_camera),
+                title: const Text('Take a Photo'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _takePhoto();
+                },
+              ),
+              if (_profileImagePath != null)
+                ListTile(
+                  leading: const Icon(Icons.delete, color: Colors.red),
+                  title: const Text('Remove Photo', style: TextStyle(color: Colors.red)),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    setState(() {
+                      _profileImagePath = null;
+                    });
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+  
+  ImageProvider? _getProfileImage() {
+    if (_profileImagePath == null) return null;
+
+    if (_profileImagePath!.startsWith('http')) {
+      return NetworkImage(_profileImagePath!);
+    } else {
+      return FileImage(File(_profileImagePath!));
+    }
   }
 } 
