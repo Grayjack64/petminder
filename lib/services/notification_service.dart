@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import '../models/reminder.dart';
 import 'package:rxdart/subjects.dart';
+import 'dart:collection';
+import 'dart:convert';
+import 'dart:io';
+import '../services/database_service.dart';
 
 class NotificationService {
   // Singleton pattern
@@ -34,67 +39,93 @@ class NotificationService {
 
     try {
       // First register the action handling method
-      AwesomeNotifications().setListeners(
-        onActionReceivedMethod: NotificationService.onActionReceivedMethod
-      );
+      try {
+        await AwesomeNotifications().setListeners(
+          onActionReceivedMethod: NotificationService.onActionReceivedMethod
+        );
+      } catch (e) {
+        print('Error setting notification listeners: $e');
+        // Continue with initialization even if this part fails
+      }
       
-      // Then initialize the channels
-      bool success = await AwesomeNotifications().initialize(
-        null, // No custom icon, will use the default app icon
-        [
-          NotificationChannel(
-            channelKey: 'basic_channel',
-            channelName: 'Basic Notifications',
-            channelDescription: 'Basic notification channel for PetMinder',
-            defaultColor: const Color(0xFF7EB5A6),
-            importance: NotificationImportance.High,
-            channelShowBadge: true,
+      // Then initialize the channels with timeout
+      bool success = false;
+      try {
+        success = await Future.any([
+          AwesomeNotifications().initialize(
+            null, // No custom icon, will use the default app icon
+            [
+              NotificationChannel(
+                channelKey: 'basic_channel',
+                channelName: 'Basic Notifications',
+                channelDescription: 'Basic notification channel for PetMinder',
+                defaultColor: const Color(0xFF7EB5A6),
+                importance: NotificationImportance.High,
+                channelShowBadge: true,
+              ),
+              NotificationChannel(
+                channelKey: 'feeding_channel',
+                channelName: 'Feeding Reminders',
+                channelDescription: 'Notifications for pet feeding reminders',
+                defaultColor: const Color(0xFFE8C07D), // Gold
+                importance: NotificationImportance.High,
+                channelShowBadge: true,
+              ),
+              NotificationChannel(
+                channelKey: 'medication_channel',
+                channelName: 'Medication Reminders',
+                channelDescription: 'Notifications for pet medication reminders',
+                defaultColor: const Color(0xFFF6AE99), // Coral
+                importance: NotificationImportance.High,
+                channelShowBadge: true,
+              ),
+              NotificationChannel(
+                channelKey: 'grooming_channel',
+                channelName: 'Grooming Reminders',
+                channelDescription: 'Notifications for pet grooming reminders',
+                defaultColor: const Color(0xFF7EB5A6), // Teal
+                importance: NotificationImportance.High,
+                channelShowBadge: true,
+              ),
+              NotificationChannel(
+                channelKey: 'other_channel',
+                channelName: 'Other Reminders',
+                channelDescription: 'Notifications for other pet reminders',
+                defaultColor: Colors.grey,
+                importance: NotificationImportance.High,
+                channelShowBadge: true,
+              ),
+            ],
           ),
-          NotificationChannel(
-            channelKey: 'feeding_channel',
-            channelName: 'Feeding Reminders',
-            channelDescription: 'Notifications for pet feeding reminders',
-            defaultColor: const Color(0xFFE8C07D), // Gold
-            importance: NotificationImportance.High,
-            channelShowBadge: true,
-          ),
-          NotificationChannel(
-            channelKey: 'medication_channel',
-            channelName: 'Medication Reminders',
-            channelDescription: 'Notifications for pet medication reminders',
-            defaultColor: const Color(0xFFF6AE99), // Coral
-            importance: NotificationImportance.High,
-            channelShowBadge: true,
-          ),
-          NotificationChannel(
-            channelKey: 'grooming_channel',
-            channelName: 'Grooming Reminders',
-            channelDescription: 'Notifications for pet grooming reminders',
-            defaultColor: const Color(0xFF7EB5A6), // Teal
-            importance: NotificationImportance.High,
-            channelShowBadge: true,
-          ),
-          NotificationChannel(
-            channelKey: 'other_channel',
-            channelName: 'Other Reminders',
-            channelDescription: 'Notifications for other pet reminders',
-            defaultColor: Colors.grey,
-            importance: NotificationImportance.High,
-            channelShowBadge: true,
-          ),
-        ],
-      );
+          // Add timeout to prevent hanging if permissions are denied
+          Future.delayed(const Duration(seconds: 3), () => false),
+        ]);
+      } catch (e) {
+        print('Error initializing notification channels: $e');
+        // Failed to initialize channels, but we'll continue
+        success = false;
+      }
       
       if (!success) {
-        print('Failed to initialize Awesome Notifications');
+        print('Failed to initialize Awesome Notifications - proceeding without notifications');
+        // We'll still mark as initialized but with limited functionality
+        _isInitialized = true;
         return false;
       }
 
       // Request notification permissions (don't throw if this fails)
       try {
-        await requestPermissions();
+        // Add timeout to permissions request
+        bool permissionSuccess = await Future.any([
+          requestPermissions(),
+          Future.delayed(const Duration(seconds: 2), () => false),
+        ]);
+        
+        if (!permissionSuccess) {
+          print('Failed to get notification permissions');
+        }
       } catch (e) {
-        print('Failed to request notification permissions: $e');
+        print('Error requesting notification permissions: $e');
         // Continue even if permissions fail
       }
       
@@ -102,7 +133,9 @@ class NotificationService {
       print('Notification service initialized successfully');
       return true;
     } catch (e) {
-      print('Error initializing notification service: $e');
+      print('Error in notification service initialization: $e');
+      // Mark as initialized anyway to prevent repeated attempts
+      _isInitialized = true;
       return false;
     }
   }
@@ -140,107 +173,161 @@ class NotificationService {
     }
   }
 
-  // Schedule a notification for a reminder - safe wrapper method
-  Future<bool> safeScheduleReminderNotification(Reminder reminder) async {
+  // Schedule a periodic check for upcoming reminders - replaces background service functionality
+  Future<void> scheduleReminderCheck() async {
+    print('Setting up reminder check scheduler');
+    
+    // Perform an initial check right away
+    await _checkAndScheduleReminders();
+    
+    // Set up periodic checks using a Timer
+    Timer.periodic(const Duration(hours: 1), (_) async {
+      print('Performing periodic reminder check');
+      await _checkAndScheduleReminders();
+    });
+  }
+  
+  // Check for upcoming reminders and schedule notifications for them
+  Future<void> _checkAndScheduleReminders() async {
+    print('Checking for upcoming reminders...');
     try {
-      // Make sure notifications are initialized
-      if (!_isInitialized) {
-        final success = await initialize();
-        if (!success) return false;
+      // Get the database service - using direct reference instead of dynamic import
+      final db = DatabaseService();
+      
+      // Get upcoming medications and tasks
+      final upcomingMedications = await db.getUpcomingDueMedications();
+      final upcomingTasks = await db.getUpcomingDueTasks();
+      
+      print('Found ${upcomingMedications.length} upcoming medications and ${upcomingTasks.length} upcoming tasks');
+      
+      // Create reminders from upcoming medications and tasks
+      List<Reminder> reminders = [];
+      
+      // Process medications
+      for (final medication in upcomingMedications) {
+        // Create a reminder for the medication
+        final nextDose = medication.nextDose;
+        
+        // Create a reminder with all required fields
+        final reminder = Reminder(
+          id: medication.id ?? 0, // Default to 0 if null
+          petId: medication.petId.toString(),
+          type: ReminderType.medication,
+          title: medication.name,
+          time: TimeOfDay(hour: nextDose.hour, minute: nextDose.minute),
+          daysOfWeek: List.generate(7, (_) => true), // Every day
+          details: medication.dosage,
+          notes: medication.notes ?? '',
+          frequency: ReminderFrequency.daily,
+          startDate: nextDose,
+        );
+        
+        reminders.add(reminder);
       }
       
-      return await scheduleReminderNotification(reminder);
-    } catch (e) {
-      print('Error scheduling reminder notification: $e');
-      return false;
-    }
-  }
-
-  // Schedule a notification for a reminder
-  Future<bool> scheduleReminderNotification(Reminder reminder) async {
-    // Check which day of week today is
-    final now = DateTime.now();
-    final weekday = now.weekday - 1; // 0 = Monday, 6 = Sunday
-    
-    // Find all the days we need to schedule for
-    List<int> daysToSchedule = [];
-    for (int i = 0; i < reminder.daysOfWeek.length; i++) {
-      if (reminder.daysOfWeek[i]) {
-        daysToSchedule.add(i);
-      }
-    }
-    
-    if (daysToSchedule.isEmpty) {
-      return false; // No days selected
-    }
-
-    // Delete any existing notifications for this reminder
-    if (reminder.id != null) {
-      await safeCancelReminderNotification(reminder.id!);
-    }
-
-    // For each day of the week, schedule a notification
-    bool allSuccessful = true;
-    for (int dayIndex in daysToSchedule) {
-      // Calculate days until the next occurrence of this weekday
-      int daysUntil = (dayIndex - weekday) % 7;
-      if (daysUntil == 0) {
-        // If today, check if the time has already passed
-        final nowTime = TimeOfDay.fromDateTime(now);
-        if (reminder.time.hour < nowTime.hour ||
-            (reminder.time.hour == nowTime.hour && reminder.time.minute <= nowTime.minute)) {
-          // Time has passed today, schedule for next week
-          daysUntil = 7;
+      // Process tasks
+      for (final task in upcomingTasks) {
+        if (!task.completed) {
+          final dueDate = task.dueDate;
+          
+          // Create a reminder for the task
+          final reminder = Reminder(
+            id: task.id ?? 0, // Default to 0 if null
+            petId: task.petId.toString(),
+            type: ReminderType.other,
+            title: task.description,
+            time: TimeOfDay(hour: dueDate.hour, minute: dueDate.minute),
+            daysOfWeek: List.generate(7, (_) => true), // Every day
+            details: '',
+            notes: task.notes ?? '',
+            frequency: ReminderFrequency.daily,
+            startDate: dueDate,
+          );
+          
+          reminders.add(reminder);
         }
       }
       
-      // Create the schedule date
-      DateTime scheduleDate = DateTime(
+      // Schedule each reminder
+      int successCount = 0;
+      for (final reminder in reminders) {
+        bool success = await safeScheduleReminderNotification(reminder);
+        if (success) {
+          successCount++;
+        }
+      }
+      
+      print('Successfully scheduled $successCount out of ${reminders.length} reminders');
+    } catch (e) {
+      print('Error checking for reminders: $e');
+    }
+  }
+
+  // Safe wrapper for scheduling a reminder notification
+  Future<bool> safeScheduleReminderNotification(Reminder reminder) async {
+    try {
+      // Skip if the reminder's time has already passed for today
+      final now = DateTime.now();
+      final reminderDateTime = DateTime(
         now.year,
         now.month,
-        now.day + daysUntil,
+        now.day,
         reminder.time.hour,
         reminder.time.minute,
       );
       
-      // Create a unique ID for each day of the week
-      int notificationId = (reminder.id ?? 0) * 10 + dayIndex;
+      if (reminderDateTime.isBefore(now) && 
+          reminder.startDate?.day == now.day && 
+          reminder.startDate?.month == now.month && 
+          reminder.startDate?.year == now.year) {
+        print('Skipping past reminder: ${reminder.title}');
+        return false;
+      }
+      
+      // Create notification content
+      final content = NotificationContent(
+        id: reminder.id ?? 0, // Default to 0 if null
+        channelKey: _getChannelKeyForType(reminder.type),
+        title: '${reminder.title} reminder',
+        body: reminder.details.isNotEmpty ? reminder.details : 'Time for ${reminder.title}',
+        notificationLayout: NotificationLayout.Default,
+        criticalAlert: true,
+        wakeUpScreen: true,
+        fullScreenIntent: true,
+        category: NotificationCategory.Reminder,
+        displayOnForeground: true,
+        displayOnBackground: true,
+      );
+      
+      // Create scheduled trigger
+      final scheduledDate = DateTime(
+        reminderDateTime.year,
+        reminderDateTime.month,
+        reminderDateTime.day,
+        reminder.time.hour,
+        reminder.time.minute,
+      );
+      
+      final trigger = NotificationCalendar(
+        hour: scheduledDate.hour,
+        minute: scheduledDate.minute,
+        second: 0,
+        repeats: true,
+        preciseAlarm: true,
+      );
       
       // Schedule the notification
-      try {
-        bool success = await AwesomeNotifications().createNotification(
-          content: NotificationContent(
-            id: notificationId,
-            channelKey: _getChannelKeyForType(reminder.type),
-            title: 'Time to ${_getReminderActionText(reminder.type)}',
-            body: '${reminder.title} ${reminder.details.isNotEmpty ? '(${reminder.details})' : ''}',
-            icon: _getIconForType(reminder.type),
-            notificationLayout: NotificationLayout.Default,
-            payload: {'id': '${reminder.id}', 'type': reminder.type.toString()},
-            color: _getColorForType(reminder.type),
-          ),
-          schedule: NotificationCalendar(
-            weekday: dayIndex + 1, // Awesome Notifications uses 1-7 for Monday-Sunday
-            hour: reminder.time.hour,
-            minute: reminder.time.minute,
-            second: 0,
-            millisecond: 0,
-            repeats: true,
-            allowWhileIdle: true,
-          ),
-        );
-        
-        if (!success) {
-          print('Failed to schedule notification for day $dayIndex');
-          allSuccessful = false;
-        }
-      } catch (e) {
-        print('Error scheduling notification for day $dayIndex: $e');
-        allSuccessful = false;
-      }
+      await AwesomeNotifications().createNotification(
+        content: content,
+        schedule: trigger,
+      );
+      
+      print('Successfully scheduled notification for: ${reminder.title}');
+      return true;
+    } catch (e) {
+      print('Error scheduling notification for ${reminder.title}: $e');
+      return false;
     }
-
-    return allSuccessful;
   }
 
   // Safe wrapper for cancelling notifications
@@ -261,10 +348,13 @@ class NotificationService {
   // Cancel a reminder notification
   Future<void> cancelReminderNotification(int id) async {
     try {
-      // Using a group key would be better, but for now cancel each possible day individually
+      // For day-of-week reminders, cancel each possible day
       for (int i = 0; i < 7; i++) {
         await AwesomeNotifications().cancel(id * 10 + i);
       }
+      
+      // For frequency-based reminders, cancel the base notification
+      await AwesomeNotifications().cancel(id * 10);
     } catch (e) {
       print('Error cancelling notification: $e');
     }
@@ -376,12 +466,50 @@ class NotificationService {
     if (s.isEmpty) return s;
     return "${s[0].toUpperCase()}${s.substring(1)}";
   }
+  
+  // Send a test notification immediately
+  Future<bool> sendTestNotification() async {
+    try {
+      // Make sure notifications are initialized
+      if (!_isInitialized) {
+        final success = await initialize();
+        if (!success) return false;
+      }
+      
+      // Check notification permission
+      final isAllowed = await AwesomeNotifications().isNotificationAllowed();
+      if (!isAllowed) {
+        final permissionGranted = await requestPermissions();
+        if (!permissionGranted) {
+          print('Notification permission denied');
+          return false;
+        }
+      }
+      
+      print('Sending test notification...');
+      return await AwesomeNotifications().createNotification(
+        content: NotificationContent(
+          id: 999,
+          channelKey: 'basic_channel',
+          title: 'Test Notification',
+          body: 'This is a test notification from PetMinder. If you can see this, notifications are working!',
+          notificationLayout: NotificationLayout.Default,
+          criticalAlert: true,
+          wakeUpScreen: true,
+          category: NotificationCategory.Reminder,
+        ),
+      );
+    } catch (e) {
+      print('Error sending test notification: $e');
+      return false;
+    }
+  }
 }
 
 // Extension to capitalize strings
 extension StringExtension on String {
   String capitalize() {
     if (isEmpty) return this;
-    return "${this[0].toUpperCase()}${substring(1)}";
+    return "${this[0].toUpperCase()}${this.substring(1)}";
   }
 } 

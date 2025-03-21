@@ -16,6 +16,7 @@ import '../utils/format_utils.dart';
 import 'pet_detail_screen.dart';
 import 'add_pet_screen.dart';
 import 'reminders_screen.dart';
+import '../services/notification_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -191,6 +192,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.notifications_outlined),
             tooltip: 'All Reminders',
             onPressed: () => _navigateToAllReminders(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.notifications),
+            tooltip: 'Test Notification',
+            onPressed: () => _testNotification(),
           ),
         ],
       ),
@@ -721,5 +727,24 @@ class _HomeScreenState extends State<HomeScreen> {
       case ReminderType.other:
         return Icons.event_note;
     }
+  }
+
+  void _testNotification() {
+    // Create a notification service instance
+    final notificationService = NotificationService();
+    
+    // Send a test notification
+    notificationService.sendTestNotification().then((success) {
+      // Show snackbar with result
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success 
+              ? 'Test notification sent successfully. Check your notifications!' 
+              : 'Failed to send test notification'),
+          backgroundColor: success ? Colors.green : Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    });
   }
 } 
