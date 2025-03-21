@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:provider/provider.dart';
 import '../models/pet.dart';
 import '../models/task.dart';
@@ -9,6 +11,7 @@ import '../providers/pet_provider.dart';
 import '../providers/task_provider.dart';
 import '../providers/medication_provider.dart';
 import '../providers/reminder_provider.dart';
+import '../services/ad_service.dart';
 import '../utils/format_utils.dart';
 import 'pet_detail_screen.dart';
 import 'add_pet_screen.dart';
@@ -27,70 +30,159 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _upcomingEventsLoading = true;
   String? _upcomingEventsError;
   List<Reminder> _todayReminders = [];
+  
+  // Ad-related variables
+  final AdService _adService = AdService();
+  BannerAd? _topBannerAd;
+  bool _isTopBannerAdLoaded = false;
 
   @override
   void initState() {
     super.initState();
+    print("HomeScreen: initState called");
+    
     // Load pets when the screen initializes, but don't block the UI
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      print("HomeScreen: postFrameCallback executed");
+      
+      // Set a timeout to ensure we always exit loading state
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted && _isLoading) {
+          print("HomeScreen: Loading timeout reached, showing error state");
+          setState(() {
+            _isLoading = false;
+            _error = "Loading timed out - please check your connection";
+          });
+        }
+        
+        if (mounted && _upcomingEventsLoading) {
+          print("HomeScreen: Events loading timeout reached");
+          setState(() {
+            _upcomingEventsLoading = false;
+            _upcomingEventsError = "Loading events timed out";
+          });
+        }
+      });
+      
+      // Load data non-blockingly
       _loadPets();
       _loadTodayReminders();
+      _loadAds();
     });
   }
   
+  @override
+  void dispose() {
+    _topBannerAd?.dispose();
+    super.dispose();
+  }
+  
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    print("HomeScreen: didChangeDependencies called");
+    
+    // Reload reminders data every time the screen becomes active
+    if (!_upcomingEventsLoading) {
+      _loadTodayReminders();
+    }
+  }
+  
+  // Load ads
+  Future<void> _loadAds() async {
+    try {
+      _topBannerAd = await _adService.loadTopBannerAd();
+      
+      if (mounted && _topBannerAd != null) {
+        setState(() {
+          _isTopBannerAdLoaded = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading ads: $e');
+    }
+  }
+  
+  // Show an interstitial ad
+  Future<void> _showInterstitialAd() async {
+    await _adService.showInterstitialAd();
+  }
+
   Future<void> _loadPets() async {
-    if (!mounted) return;
+    print("HomeScreen: Loading pets...");
+    if (!mounted) {
+      print("HomeScreen: Widget not mounted, skipping pet loading");
+      return;
+    }
     
     try {
-      await Provider.of<PetProvider>(context, listen: false).loadPets();
-    } catch (e) {
-      // If there's an error, capture it but don't crash
+      final petProvider = Provider.of<PetProvider>(context, listen: false);
+      await petProvider.loadPets().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          print("HomeScreen: Pet loading timed out");
+          throw TimeoutException("Pet loading timed out");
+        },
+      );
+      
       if (mounted) {
+        print("HomeScreen: Pets loaded successfully");
         setState(() {
-          _error = "Failed to load pets: $e";
+          _isLoading = false;
+          _error = null;
         });
-        print("Error loading pets: $e");
       }
-    } finally {
+    } catch (e) {
+      print("HomeScreen: Error loading pets: $e");
       if (mounted) {
         setState(() {
           _isLoading = false;
+          _error = "Error loading pets: $e";
         });
       }
     }
   }
   
+  // Load today's reminders
   Future<void> _loadTodayReminders() async {
-    if (!mounted) return;
-    
-    setState(() {
-      _upcomingEventsLoading = true;
-      _upcomingEventsError = null;
-    });
+    print("HomeScreen: Loading today's reminders...");
+    if (!mounted) {
+      print("HomeScreen: Widget not mounted, skipping reminder loading");
+      return;
+    }
     
     try {
       final reminderProvider = Provider.of<ReminderProvider>(context, listen: false);
-      final reminders = await reminderProvider.getAllRemindersForToday();
+      final reminders = await reminderProvider.getAllRemindersForToday().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          print("HomeScreen: Reminder loading timed out");
+          throw TimeoutException("Reminder loading timed out");
+        },
+      );
       
       if (mounted) {
+        print("HomeScreen: Reminders loaded successfully: ${reminders.length} items");
         setState(() {
           _todayReminders = reminders;
           _upcomingEventsLoading = false;
+          _upcomingEventsError = null;
         });
       }
     } catch (e) {
+      print("HomeScreen: Error loading reminders: $e");
       if (mounted) {
         setState(() {
-          _upcomingEventsError = "Failed to load today's reminders: $e";
           _upcomingEventsLoading = false;
+          _upcomingEventsError = "Error loading reminders: $e";
         });
-        print("Error loading today's reminders: $e");
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    print("HomeScreen: build method called");
     return Scaffold(
       appBar: AppBar(
         title: const Text('PetMinder'),
@@ -102,35 +194,77 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null 
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        'Error: $_error',
-                        style: const TextStyle(color: Colors.red),
-                        textAlign: TextAlign.center,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Top banner ad
+            if (_isTopBannerAdLoaded && _topBannerAd != null)
+              Container(
+                alignment: Alignment.center,
+                width: _topBannerAd!.size.width.toDouble(),
+                height: _topBannerAd!.size.height.toDouble(),
+                child: AdWidget(ad: _topBannerAd!),
+              ),
+              
+            // Main content
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text("Loading pets..."),
+                        ],
                       ),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: () {
-                          setState(() {
-                            _isLoading = true;
-                            _error = null;
-                          });
-                          _loadPets();
-                        },
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                )
-              : _buildBody(context),
+                    )
+                  : _error != null 
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                              const SizedBox(height: 16),
+                              Text(
+                                'Error: $_error',
+                                style: const TextStyle(color: Colors.red),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 16),
+                              ElevatedButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _isLoading = true;
+                                    _error = null;
+                                  });
+                                  _loadPets();
+                                },
+                                child: const Text('Retry'),
+                              ),
+                              const SizedBox(height: 16),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _error = null;
+                                  });
+                                },
+                                child: const Text('Continue Without Loading'),
+                              ),
+                            ],
+                          ),
+                        )
+                      : _buildBody(context),
+            ),
+          ],
+        ),
+      ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _navigateToAddPet(context),
+        onPressed: () {
+          // Show an interstitial ad when adding a new pet
+          _showInterstitialAd();
+          _navigateToAddPet(context);
+        },
         tooltip: 'Add Pet',
         child: const Icon(Icons.add),
       ),
@@ -375,7 +509,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           SizedBox(
-            height: 100,
+            height: 105,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 8.0),
@@ -519,7 +653,10 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (context) => PetDetailScreen(pet: pet),
       ),
-    );
+    ).then((_) {
+      // Refresh reminders when returning from PetDetailScreen
+      _loadTodayReminders();
+    });
   }
 
   void _navigateToAddPet(BuildContext context) {
@@ -528,7 +665,11 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (context) => const AddPetScreen(),
       ),
-    );
+    ).then((_) {
+      // Refresh data when returning from AddPetScreen
+      _loadPets();
+      _loadTodayReminders();
+    });
   }
   
   void _navigateToAllReminders(BuildContext context) {
@@ -537,7 +678,10 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (context) => const RemindersScreen(),
       ),
-    );
+    ).then((_) {
+      // Refresh reminders when returning from RemindersScreen
+      _loadTodayReminders();
+    });
   }
   
   Color _getColorByType(ReminderType type) {

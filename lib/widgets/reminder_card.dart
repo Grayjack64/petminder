@@ -27,6 +27,7 @@ class ReminderCard extends StatelessWidget {
     return Card(
       elevation: 2,
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
@@ -38,6 +39,7 @@ class ReminderCard extends StatelessWidget {
         padding: const EdgeInsets.all(12.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -141,12 +143,13 @@ class ReminderCard extends StatelessWidget {
             // Action buttons
             if (isDue) 
               Padding(
-                padding: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.only(top: 12, bottom: 1),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     // Action buttons area (edit, delete)
                     Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         if (onEdit != null)
                           IconButton(
@@ -155,6 +158,7 @@ class ReminderCard extends StatelessWidget {
                             color: Colors.grey[600],
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
+                            visualDensity: VisualDensity.compact,
                           ),
                         if (onEdit != null && onDelete != null)
                           const SizedBox(width: 16),
@@ -165,6 +169,7 @@ class ReminderCard extends StatelessWidget {
                             color: Colors.grey[600],
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
+                            visualDensity: VisualDensity.compact,
                           ),
                       ],
                     ),
@@ -174,7 +179,8 @@ class ReminderCard extends StatelessWidget {
                       onPressed: () => _markAsDone(context),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: typeColor,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        minimumSize: const Size(60, 28),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(20),
                         ),
@@ -184,6 +190,7 @@ class ReminderCard extends StatelessWidget {
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
+                          fontSize: 12,
                         ),
                       ),
                     ),
